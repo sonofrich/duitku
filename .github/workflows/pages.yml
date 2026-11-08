@@ -18,13 +18,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Install deps
-        run: |
-          npm install -g npm@latest
-          npm config set registry https://registry.npmjs.org/
-          rm -f package-lock.json
-          for i in 1 2 3; do npm install --no-audit --no-fund && break || sleep 10; done
-          test -d node_modules/vite
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
       - run: npm run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
