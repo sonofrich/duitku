@@ -19,6 +19,22 @@ export const AGENT_TOOLS = [
 
 type FnCtx = { today: string; month: string };
 type Fn = (args: any, ctx: FnCtx) => Promise<string>;
+const validDate = (v: unknown): v is string => {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const [y,m,d] = v.split('-').map(Number), x = new Date(Date.UTC(y,m-1,d));
+  return x.getUTCFullYear()===y && x.getUTCMonth()===m-1 && x.getUTCDate()===d;
+};
+const validTime = (v: unknown): v is string => typeof v === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(v);
+const taskOccursOn = (t: any, date: string) => {
+  if (date < t.date) return false;
+  if (t.repeat === 'none') return t.date === date;
+  if (t.repeat === 'daily') return true;
+  const [sy,sm,sd]=t.date.split('-').map(Number), [y,m,d]=date.split('-').map(Number);
+  const start=new Date(sy,sm-1,sd);
+  if (t.repeat === 'weekly') return start.getDay() === new Date(y,m-1,d).getDay();
+  const last=new Date(y,m,0).getDate();
+  return sd===d || (sd>=29 && d===last && sd>d);
+};
 
 export const TOOL_FNS: Record<string, Fn> = {
   get_summary: async (_a, ctx) => {
@@ -36,7 +52,7 @@ export const TOOL_FNS: Record<string, Fn> = {
       accounts: accounts.map(a => ({ id: a.id, name: a.name, saldo: bal(a.id!) })),
       bulan_ini: { pemasukan: mT.filter(t => t.type === 'in').reduce((s, t) => s + t.amount, 0), pengeluaran: mT.filter(t => t.type === 'out').reduce((s, t) => s + t.amount, 0), per_kategori: by },
       hari_ini: { pemasukan: dT.filter(t => t.type === 'in').reduce((s, t) => s + t.amount, 0), pengeluaran: dT.filter(t => t.type === 'out').reduce((s, t) => s + t.amount, 0) },
-      tugas_hari_ini: tasks.filter(t => t.date === ctx.today).map(t => ({ id: t.id, title: t.title, time: t.time, done: t.done })),
+      tugas_hari_ini: tasks.filter(t => taskOccursOn(t, ctx.today)).map(t => ({ id: t.id, title: t.title, time: t.time, done: t.repeat === 'none' ? !!t.done : (t.doneOn || []).includes(ctx.today) })),
       dca: { total_modal: trades.reduce((s, t) => s + t.amount, 0), jumlah_rencana: (await db.plans.toArray()).length },
     });
   },
@@ -56,7 +72,7 @@ export const TOOL_FNS: Record<string, Fn> = {
     if (!Number.isFinite(a.amount) || a.amount <= 0) return 'Error: amount harus angka finite > 0';
     if (!['in', 'out'].includes(a.type)) return 'Error: type harus in atau out';
     const date = a.date || ctx.today;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date)) || new Date(date + 'T00:00:00Z').toISOString().slice(0, 10) !== date) return 'Error: date harus tanggal valid YYYY-MM-DD';
+    if (!validDate(date)) return 'Error: date harus tanggal valid YYYY-MM-DD';
     const accounts = await db.accounts.toArray();
     const accId = a.accountId ?? accounts[0]?.id;
     if (!accId || !accounts.some(x => x.id === accId)) return 'Error: accountId tidak ditemukan atau belum ada rekening';
@@ -71,16 +87,28 @@ export const TOOL_FNS: Record<string, Fn> = {
   },
   delete_transaction: async (a) => {
     if (!Number.isInteger(a.id) || a.id <= 0) return 'Error: ID transaksi tidak valid';
-    if (!(globalThis as any).__duitkuConfirm?.(`Hapus transaksi #${a.id}?`)) return 'DIBATALKAN: user tidak konfirmasi. Jangan ulangi tanpa persetujuan.';
     const { db } = await import('./db');
     const exists = await db.txs.get(a.id);
-    if (!exists) return `Error: transaksi #${a.id} tidak ditemukan`;
-    await db.txs.delete(a.id); return `OK: transaksi #${a.id} dihapus.`;
+    if (!exists) return 'Error: transaksi #' + a.id + ' tidak ditemukan';
+    if (exists.transferId || exists.category === 'Transfer') {
+      if (!exists.transferId) return 'Error: transfer lama tanpa ID pasangan dilindungi agar saldo tidak rusak';
+      const pair = await db.txs.where('transferId').equals(exists.transferId).toArray();
+      const validPair = pair.length === 2 && pair.every(t => t.category === 'Transfer' && t.transferId === exists.transferId) &&
+        pair.filter(t => t.type === 'out').length === 1 && pair.filter(t => t.type === 'in').length === 1 &&
+        pair[0].accountId !== pair[1].accountId && pair[0].amount === pair[1].amount;
+      if (!validPair) return 'Error: pasangan transfer tidak utuh atau tidak konsisten. Tidak ada data yang dihapus.';
+      if (!(globalThis as any).__duitkuConfirm?.('Hapus kedua sisi transfer #' + a.id + '?')) return 'DIBATALKAN: user tidak konfirmasi. Jangan ulangi tanpa persetujuan.';
+      await db.transaction('rw', db.txs, async () => { await db.txs.where('transferId').equals(exists.transferId!).delete(); });
+      return 'OK: kedua sisi transfer #' + a.id + ' dihapus.';
+    }
+    if (!(globalThis as any).__duitkuConfirm?.('Hapus transaksi #' + a.id + '?')) return 'DIBATALKAN: user tidak konfirmasi. Jangan ulangi tanpa persetujuan.';
+    await db.txs.delete(a.id);
+    return 'OK: transaksi #' + a.id + ' dihapus.';
   },
   list_tasks: async (a, ctx) => {
     const { db } = await import('./db');
     const date = a.date || ctx.today;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) return 'Error: date harus YYYY-MM-DD';
+    if (!validDate(date)) return 'Error: date harus tanggal valid YYYY-MM-DD';
     const allTasks = await db.tasks.toArray();
     const list = a.all ? allTasks : allTasks.filter((t: any) => {
       if (date < t.date) return false;
@@ -95,18 +123,26 @@ export const TOOL_FNS: Record<string, Fn> = {
     return JSON.stringify(list);
   },
   add_task: async (a, ctx) => {
+    const title = typeof a.title === 'string' ? a.title.trim() : '';
+    const date = a.date ?? ctx.today, time = a.time ?? '', priority = a.priority ?? 2, repeat = a.repeat ?? 'none';
+    if (!title || title.length > 200) return 'Error: judul tugas wajib diisi (maksimal 200 karakter)';
+    if (!validDate(date)) return 'Error: date harus tanggal valid YYYY-MM-DD';
+    if (time !== '' && !validTime(time)) return 'Error: time harus format HH:MM valid';
+    if (![1,2,3].includes(priority)) return 'Error: priority harus 1, 2, atau 3';
+    if (!['none','daily','weekly','monthly'].includes(repeat)) return 'Error: repeat tidak valid';
     const { db } = await import('./db');
     const { schedule } = await import('./notif');
-    const t: any = { title: a.title, date: a.date || ctx.today, time: a.time || '', priority: ([1, 2, 3].includes(a.priority) ? a.priority : 2) as 1 | 2 | 3, repeat: (['none', 'daily', 'weekly', 'monthly'].includes(a.repeat) ? a.repeat : 'none') as any, done: false, doneOn: [] };
+    const t: any = { title, date, time, priority: priority as 1|2|3, repeat: repeat as any, done: false, doneOn: [] };
     t.id = await db.tasks.add(t as any);
-    schedule(t as any);
-    return `OK: tugas "${t.title}" dibuat untuk ${t.date}${t.time ? ' pukul ' + t.time : ''}.`;
+    await schedule(t as any);
+    return 'OK: tugas "' + t.title + '" dibuat untuk ' + t.date + (t.time ? ' pukul ' + t.time : '') + '.';
   },
   complete_task: async (a, ctx) => {
     const { db } = await import('./db');
     const list = await db.tasks.toArray();
-    if (!a.id && !String(a.title || '').trim()) return 'Error: berikan ID atau judul tugas';
-    const matches = a.id ? list.filter((x: any) => x.id === a.id) : list.filter((x: any) => x.title.toLowerCase().includes(String(a.title).trim().toLowerCase()));
+    if (a.id !== undefined && (!Number.isInteger(a.id) || a.id <= 0)) return 'Error: ID tugas tidak valid';
+    if (a.id === undefined && !String(a.title || '').trim()) return 'Error: berikan ID atau judul tugas';
+    const matches = a.id !== undefined ? list.filter((x: any) => x.id === a.id) : list.filter((x: any) => x.title.toLowerCase().includes(String(a.title).trim().toLowerCase()));
     if (!matches.length) return 'Error: tugas tidak ditemukan';
     if (matches.length > 1) return 'Error: judul cocok dengan beberapa tugas. Berikan ID tugas yang tepat.';
     const t = matches[0];
@@ -119,7 +155,9 @@ export const TOOL_FNS: Record<string, Fn> = {
     if (!(globalThis as any).__duitkuConfirm?.(`Hapus tugas #${a.id}?`)) return 'DIBATALKAN: user tidak konfirmasi. Jangan ulangi tanpa persetujuan.';
     const { db } = await import('./db');
     if (!(await db.tasks.get(a.id))) return `Error: tugas #${a.id} tidak ditemukan`;
-    await db.tasks.delete(a.id); return `OK: tugas #${a.id} dihapus.`;
+    const { cancel } = await import('./notif');
+    await db.tasks.delete(a.id); await cancel(a.id);
+    return `OK: tugas #${a.id} dihapus.`;
   },
   list_accounts: async () => {
     const { db } = await import('./db');
@@ -189,38 +227,40 @@ export async function agentTurn(history: Msg[], cfg: Cfg, push: (m: Msg) => void
     'Jawab akhir singkat & jelas. Simulasi investasi bukan nasihat keuangan.';
 
   const convo: any[] = [{ role: 'system', content: sys }, ...history.map(h => ({ role: h.role, content: h.content }))];
+  const geminiContents: any[] = history.map(h => ({ role: h.role === 'assistant' ? 'model' : 'user', parts: [{ text: h.content }] }));
 
   for (let round = 0; round < 6; round++) {
     if (cfg.provider === 'gemini') {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${cfg.model}:generateContent`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': cfg.key },
+      const r = await fetch(\`https://generativelanguage.googleapis.com/v1beta/models/\${cfg.model}:generateContent\`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': cfg.key },
         body: JSON.stringify({
-          systemInstruction: { parts: [{ text: sys }] },
-          contents: convo.filter(m => m.role !== 'system').map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
-          tools: allowedTools(cfg).map(t => ({ functionDeclarations: [t.function] })),
+          systemInstruction: { parts: [{ text: sys }] }, contents: geminiContents,
+          tools: [{ functionDeclarations: allowedTools(cfg).map(t => t.function) }],
         })
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error?.message || 'Permintaan gagal');
-      const cand = j.candidates?.[0]?.content?.parts || [];
-      const fc = cand.find((p: any) => p.functionCall)?.functionCall;
-      const txt = cand.filter((p: any) => p.text).map((p: any) => p.text).join('');
-      if (fc) {
-        let out = 'tool tidak dikenal';
-        try {
-          if (!toolAllowed(fc.name, cfg)) out = DENY_MSG;
-          else out = await (TOOL_FNS[fc.name] || (async () => 'tool tidak dikenal'))(fc.args || {}, ctx);
-        } catch (e: any) { out = 'Error: ' + (e?.message || e); }
-        push({ role: 'assistant', content: `🔧 ${fc.name} → selesai` });
-        convo.push({ role: 'assistant', content: txt || `[memanggil ${fc.name}]` });
-        convo.push({ role: 'user', content: `[Hasil ${fc.name}]: ${out}` });
+      const modelContent = j.candidates?.[0]?.content, parts = modelContent?.parts || [];
+      const calls = parts.filter((p: any) => p.functionCall).map((p: any) => p.functionCall);
+      const txt = parts.filter((p: any) => p.text).map((p: any) => p.text).join('');
+      if (calls.length) {
+        geminiContents.push(modelContent);
+        const responses: any[] = [];
+        for (const fc of calls) {
+          let out = 'tool tidak dikenal';
+          try {
+            if (!toolAllowed(fc.name, cfg)) out = DENY_MSG;
+            else out = await (TOOL_FNS[fc.name] || (async () => 'tool tidak dikenal'))(fc.args || {}, ctx);
+          } catch (e: any) { out = 'Error: ' + (e?.message || e); }
+          push({ role: 'assistant', content: '🔧 ' + fc.name + ' → selesai' });
+          responses.push({ functionResponse: { name: fc.name, response: { result: out } } });
+        }
+        geminiContents.push({ role: 'user', parts: responses });
         continue;
       }
-      push({ role: 'assistant', content: txt });
+      push({ role: 'assistant', content: txt || '(tidak ada jawaban)' });
       return;
-    }
-    // OpenRouter (OpenAI-compatible tool calls)
+    }    // OpenRouter (OpenAI-compatible tool calls)
     const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.key}` },
