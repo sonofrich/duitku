@@ -33,11 +33,56 @@ export default function Settings() {
     try {
       const o = JSON.parse(await f.text());
       const all = [...TABLES, 'kv'] as any[];
+      const isObj = (v: any) => !!v && typeof v === 'object' && !Array.isArray(v);
+      const isDate = (v: any) => {
+        if (typeof v !== 'string' || !/^\\d{4}-\\d{2}-\\d{2}$/.test(v)) return false;
+        const [y, m, d] = v.split('-').map(Number);
+        const x = new Date(Date.UTC(y, m - 1, d));
+        return x.getUTCFullYear() === y && x.getUTCMonth() === m - 1 && x.getUTCDate() === d;
+      };
+      const isTime = (v: any) => v === '' || (typeof v === 'string' && /^(?:[01]\\d|2[0-3]):[0-5]\\d$/.test(v));
+      if (!isObj(o) || all.some(t => !Array.isArray(o[t]))) throw new Error('Struktur backup tidak lengkap');
+
+      const valid = {
+        accounts: o.accounts.every((x: any) => isObj(x) && typeof x.name === 'string' && x.name.trim() && Number.isFinite(x.balance0)),
+        txs: o.txs.every((x: any) => isObj(x) && isDate(x.date) && ['in', 'out'].includes(x.type) &&
+          Number.isFinite(x.amount) && x.amount > 0 && Number.isInteger(x.accountId) && typeof x.category === 'string' &&
+          (x.transferId === undefined || typeof x.transferId === 'string')),
+        budgets: o.budgets.every((x: any) => isObj(x) && typeof x.category === 'string' && Number.isFinite(x.limit) && x.limit > 0),
+        tasks: o.tasks.every((x: any) => isObj(x) && typeof x.title === 'string' && x.title.trim() && isDate(x.date) &&
+          isTime(x.time ?? '') && [1, 2, 3].includes(x.priority ?? 2) &&
+          ['none', 'daily', 'weekly', 'monthly'].includes(x.repeat ?? 'none') &&
+          (x.done === undefined || typeof x.done === 'boolean') &&
+          (x.doneOn === undefined || (Array.isArray(x.doneOn) && x.doneOn.every(isDate)))),
+        plans: o.plans.every((x: any) => isObj(x) && typeof x.name === 'string' && Number.isFinite(x.daily) && x.daily > 0 &&
+          isDate(x.startDate) && (x.lastRun === '' || x.lastRun === undefined || isDate(x.lastRun)) &&
+          isObj(x.alloc) && Object.values(x.alloc).every(v => Number.isFinite(v) && Number(v) >= 0) && typeof x.active === 'boolean'),
+        trades: o.trades.every((x: any) => isObj(x) && Number.isInteger(x.planId) && isDate(x.date) &&
+          typeof x.symbol === 'string' && Number.isFinite(x.price) && x.price > 0 &&
+          Number.isFinite(x.amount) && x.amount > 0 && Number.isFinite(x.qty) && x.qty > 0),
+        notes: o.notes.every((x: any) => isObj(x) && typeof x.title === 'string' && typeof x.body === 'string' &&
+          ['umum', 'tugas'].includes(x.kind) && typeof x.secret === 'boolean' && isDate(x.date) &&
+          typeof x.pinned === 'boolean' && typeof x.createdAt === 'string' && typeof x.updatedAt === 'string'),
+        kv: o.kv.every((x: any) => isObj(x) && typeof x.key === 'string' && x.key.length > 0)
+      };
+      const invalid = Object.keys(valid).filter(k => !(valid as any)[k]);
+      if (invalid.length) throw new Error('Data tidak valid: ' + invalid.join(', '));
+
+      // Normalisasi field opsional dari backup versi lama sebelum menulis DB.
+      const normalized = {
+        ...o,
+        tasks: o.tasks.map((t: any) => ({ ...t, time: t.time ?? '', priority: t.priority ?? 2, repeat: t.repeat ?? 'none', done: t.done ?? false, doneOn: Array.isArray(t.doneOn) ? t.doneOn : [] }))
+      };
       await db.transaction('rw', all.map(t => (db as any)[t]), async () => {
-        for (const t of all) { await (db as any)[t].clear(); if (o[t]?.length) await (db as any)[t].bulkAdd(o[t]); }
+        for (const t of all) {
+          await (db as any)[t].clear();
+          if (normalized[t].length) await (db as any)[t].bulkAdd(normalized[t]);
+        }
       });
       setMsg('Data dipulihkan.');
-    } catch { setMsg('File backup tidak valid.'); }
+    } catch (e: any) {
+      setMsg('Backup ditolak: ' + (e?.message || 'format tidak valid') + '. Data lama tetap aman.');
+    }
   };
 
   const Sec = ({ icon, title, desc, children }: { icon: any; title: string; desc?: string; children: any }) => (
