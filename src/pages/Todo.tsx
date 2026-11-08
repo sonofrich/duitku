@@ -15,7 +15,7 @@ const occurs = (t: Task, d: string) => {
   if (a.getDate() === b.getDate()) return true;
   return a.getDate() >= 29 && b.getDate() === new Date(b.getFullYear(), b.getMonth() + 1, 0).getDate() && a.getDate() > b.getDate();
 };
-const isDone = (t: Task, d: string) => (t.repeat === 'none' ? t.done : t.doneOn.includes(d));
+const isDone = (t: Task, d: string) => (t.repeat === 'none' ? t.done : (t.doneOn || []).includes(d));
 const PRI = ['', 'Tinggi', 'Sedang', 'Rendah'];
 const PRI_C = ['', '#ef4444', '#f59e0b', '#22c55e'];
 
@@ -48,7 +48,7 @@ export default function Todo() {
   };
   const toggle = (t: Task) => t.repeat === 'none'
     ? db.tasks.update(t.id!, { done: !t.done })
-    : db.tasks.update(t.id!, { doneOn: t.doneOn.includes(sel) ? t.doneOn.filter(x => x !== sel) : [...t.doneOn, sel] });
+    : db.tasks.update(t.id!, { doneOn: (t.doneOn || []).includes(sel) ? (t.doneOn || []).filter(x => x !== sel) : [...(t.doneOn || []), sel] });
 
   const R = 26, C = 2 * Math.PI * R;
 
