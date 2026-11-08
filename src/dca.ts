@@ -71,8 +71,13 @@ async function runPlanUnlocked(plan: DcaPlan): Promise<number> {
     // Jika salah satu sumber aset gagal, jangan majukan cursor global.
     // Pembelian aset yang berhasil tetap aman karena idempotensi date|symbol;
     // retry berikutnya bisa mengejar aset yang tadi gagal tanpa menggandakan trade.
-    if (failed.length === 0 && latestProcessed > (plan.lastRun || '')) {
-      await db.plans.update(plan.id!, { lastRun: latestProcessed });
+    if (failed.length === 0) {
+      // Baca cursor terbaru di dalam transaksi. Dua tab bisa mulai dari snapshot
+      // berbeda; membandingkan hanya dengan plan.lastRun lama bisa memundurkan cursor.
+      const currentPlan = await db.plans.get(plan.id!);
+      if (currentPlan && latestProcessed > (currentPlan.lastRun || '')) {
+        await db.plans.update(plan.id!, { lastRun: latestProcessed });
+      }
     }
   });
   return inserted;
