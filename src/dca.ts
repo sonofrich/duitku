@@ -16,9 +16,9 @@ async function runPlanUnlocked(plan: DcaPlan): Promise<number> {
   if (total < 99 || total > 101) throw new Error(`${plan.name}: total alokasi ${total.toFixed(1)}% tidak valid`);
   const norm = total / 100;
 
-  const rate = await usdIdr();
-  const fx = isIDR(Object.keys(plan.alloc).find(a => !isIDR(a)) || '') ? null : await usdIdrSeries(from);
   const assets = Object.keys(plan.alloc);
+  const usdAssets = assets.filter(a => !isIDR(a));
+  const fx = usdAssets.length ? await usdIdrSeries(from) : null;
   const ser: Record<string, Record<string, number>> = {};
   const failed: string[] = [];
   for (let i = 0; i < assets.length; i++) {
@@ -38,7 +38,11 @@ async function runPlanUnlocked(plan: DcaPlan): Promise<number> {
     for (const [a, pct] of Object.entries(okAlloc)) {
       const px = ser[a][d];
       if (!px || !Number.isFinite(px) || px <= 0) continue;
-      const price = isIDR(a) ? px : px * (fx?.[d] || rate);
+      const exchangeRate = isIDR(a) ? 1 : fx?.[d];
+      if (!Number.isFinite(exchangeRate) || exchangeRate! <= 0) {
+        throw new Error(`Kurs USD/IDR historis tidak tersedia untuk ${d}; pembelian DCA dibatalkan agar nilai tidak direkayasa.`);
+      }
+      const price = px * exchangeRate!;
       const amount = (plan.daily * pct) / (100 * okNorm);
       const qty = price > 0 ? amount / price : 0;
       if (Number.isFinite(price) && Number.isFinite(qty) && qty > 0) {
@@ -64,7 +68,10 @@ async function runPlanUnlocked(plan: DcaPlan): Promise<number> {
     // Jangan menggeser lastRun ke belakang. Baris yang sudah ada tetap dihitung
     // sebagai telah diproses, sehingga retry tidak menggandakan pembelian.
     const latestProcessed = rows.reduce((m, r) => r.date > m ? r.date : m, plan.lastRun || plan.startDate);
-    if (latestProcessed > (plan.lastRun || '')) {
+    // Jika salah satu sumber aset gagal, jangan majukan cursor global.
+    // Pembelian aset yang berhasil tetap aman karena idempotensi date|symbol;
+    // retry berikutnya bisa mengejar aset yang tadi gagal tanpa menggandakan trade.
+    if (failed.length === 0 && latestProcessed > (plan.lastRun || '')) {
       await db.plans.update(plan.id!, { lastRun: latestProcessed });
     }
   });
