@@ -51,7 +51,7 @@ export async function usdIdr(): Promise<number> {
 // Dipakai DCA agar pembelian historis memakai kurs sesuai tanggalnya, bukan kurs hari ini.
 // Return { 'YYYY-MM-DD': kurs } utk rentang from..today; weekend/libur → kurs hari kerja terakhir.
 export async function usdIdrSeries(from: string): Promise<Record<string, number>> {
-  const cacheKey = 'fxusd:' + from;
+  const cacheKey = 'fxusd:v2:' + from;
   const cached = await getKv(cacheKey, null) as Record<string, number> | null;
   const end = today();
   const cacheCoversRange = cached && typeof cached === 'object' &&
