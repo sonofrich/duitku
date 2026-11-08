@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Cell, Pie, PieChart, Tooltip } from 'recharts';
-import { db, getKv } from '../db';
+import { db } from '../db';
 import { idr, num, saveFile, today } from '../util';
 import { Ic, Deco } from '../icons';
 
@@ -50,16 +50,12 @@ export default function Finance() {
 
   // ── Net Worth: aset = kas + portofolio (nilai kini dari harga terakhir di KV) ──
   const tradesNW = useLiveQuery(() => db.trades.toArray(), []) || [];
-  const [pfVal, setPfVal] = useState(0);
-  useEffect(() => {
-    (async () => {
-      const qty: Record<string, number> = {};
-      tradesNW.forEach(t => (qty[t.symbol] = (qty[t.symbol] || 0) + t.qty));
-      let v = 0;
-      for (const [s, q] of Object.entries(qty)) v += q * (await getKv('px:' + s, 0));
-      setPfVal(v);
-    })();
-  }, [tradesNW.length]);
+  const marketCache = useLiveQuery(() => db.kv.toArray(), []) || [];
+  const priceBySymbol = new Map(marketCache.filter(x => x.key.startsWith('px:')).map(x => [x.key.slice(3), Number(x.value)]));
+  const pfVal = tradesNW.reduce((sum, trade) => {
+    const price = priceBySymbol.get(trade.symbol) || 0;
+    return sum + (Number.isFinite(price) && price > 0 ? trade.qty * price : 0);
+  }, 0);
   const netWorth = total + pfVal;
 
   const add = async (type: string) => {
