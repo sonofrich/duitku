@@ -13,6 +13,47 @@ const sha = async (s: string) => {
   return [...data].map(b => b.toString(16).padStart(2, '0')).join('');
 };
 
+const ensureVaultSalt = () => {
+  let salt = localStorage.getItem('pinsalt');
+  if (!salt) {
+    salt = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
+    localStorage.setItem('pinsalt', salt);
+  }
+  return salt;
+};
+const vaultKey = async (pin: string | null) => {
+  const salt = ensureVaultSalt();
+  const base = pin ? pin : 'duitku-device:' + salt;
+  const iterations = pin ? 150000 : 10000;
+  const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(base), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: new TextEncoder().encode('duitku-notes:' + salt), iterations, hash: 'SHA-256' },
+    material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+  );
+};
+const decryptVaultBody = async (stored: string, oldPin: string | null) => {
+  if (!stored.startsWith('enc:')) return stored;
+  const bytes = Uint8Array.from(atob(stored.slice(4)), ch => ch.charCodeAt(0));
+  const iv = bytes.slice(0, 12), ciphertext = bytes.slice(12);
+  for (const candidate of oldPin ? [oldPin, null] : [null]) {
+    try {
+      const key = await vaultKey(candidate);
+      const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+      return new TextDecoder().decode(plain);
+    } catch { /* coba key device lama */ }
+  }
+  throw new Error('Ada catatan rahasia yang gagal dibuka. PIN tidak diubah agar data tidak terkunci.');
+};
+const encryptVaultBody = async (plain: string, newPin: string | null) => {
+  const key = await vaultKey(newPin);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(plain));
+  const bytes = new Uint8Array(iv.length + encrypted.byteLength);
+  bytes.set(iv);
+  bytes.set(new Uint8Array(encrypted), iv.length);
+  return 'enc:' + btoa(String.fromCharCode(...bytes));
+};
+
 // Settings rapi: section berkelompok dengan ikon + deskripsi
 export default function Settings() {
   const [c, setC] = useState<Cfg>(loadCfg());
@@ -148,11 +189,29 @@ export default function Settings() {
       <Sec icon={<Ic.eye size={17} />} title="Keamanan">
         <input type="password" inputMode="numeric" value={pin} onChange={e => setPin(e.target.value)} placeholder="PIN baru (kosongkan untuk mematikan)" />
         <button className="btn alt" onClick={async () => {
-  if (pin) {
-    localStorage.setItem('pin', await sha(pin));
-    sessionStorage.setItem('duitku-pin-session', pin); // vault notes langsung terikat PIN baru
-  } else { localStorage.removeItem('pin'); sessionStorage.removeItem('duitku-pin-session'); }
-  setPin(''); setMsg(pin ? 'PIN aktif.' : 'PIN dimatikan.');
+  try {
+    if (pin && !/^\d{4,12}$/.test(pin)) throw new Error('PIN harus 4–12 digit angka.');
+    const oldPin = sessionStorage.getItem('duitku-pin-session');
+    const secretNotes = await db.notes.filter(n => n.secret).toArray();
+    const migrated = await Promise.all(secretNotes.map(async n => ({
+      id: n.id!,
+      body: await encryptVaultBody(await decryptVaultBody(n.body, oldPin), pin || null)
+    })));
+    await db.transaction('rw', db.notes, async () => {
+      for (const item of migrated) await db.notes.update(item.id, { body: item.body });
+    });
+    if (pin) {
+      localStorage.setItem('pin', await sha(pin));
+      sessionStorage.setItem('duitku-pin-session', pin);
+    } else {
+      localStorage.removeItem('pin');
+      sessionStorage.removeItem('duitku-pin-session');
+    }
+    setPin('');
+    setMsg(pin ? 'PIN aktif. Catatan rahasia ikut dimigrasikan.' : 'PIN dimatikan. Catatan rahasia tetap terenkripsi dengan kunci perangkat.');
+  } catch (e: any) {
+    setMsg(e?.message || 'PIN gagal diubah. Data catatan tetap aman.');
+  }
 }}>Simpan PIN</button>
       </Sec>
 
