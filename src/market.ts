@@ -34,10 +34,17 @@ function bH(): Record<string, string> | undefined {
 export async function usdIdr(): Promise<number> {
   try {
     const r = await fetch('https://open.er-api.com/v6/latest/USD');
-    const v = (await r.json()).rates.IDR;
+    if (!r.ok) throw new Error('Kurs USD/IDR HTTP ' + r.status);
+    const j = await r.json();
+    const v = Number(j?.rates?.IDR);
+    if (!Number.isFinite(v) || v <= 0) throw new Error('Kurs USD/IDR tidak valid');
     await setKv('usdidr', v);
     return v;
-  } catch { return getKv('usdidr', 16000); }
+  } catch {
+    const cached = Number(await getKv('usdidr', 0));
+    if (Number.isFinite(cached) && cached > 0) return cached;
+    throw new Error('Kurs USD/IDR tidak tersedia dan cache belum valid');
+  }
 }
 
 // ── Kurs USD/IDR HISTORIS (frankfurter.app — data ECB, gratis, tanpa key) ──
@@ -46,33 +53,37 @@ export async function usdIdr(): Promise<number> {
 export async function usdIdrSeries(from: string): Promise<Record<string, number>> {
   const cacheKey = 'fxusd:' + from;
   const cached = await getKv(cacheKey, null) as Record<string, number> | null;
-  // cache masih segar kalau sudah mencakup hari ini
-  if (cached && typeof cached === 'object' && cached[today()]) return cached;
-  try {
-    const u = `https://api.frankfurter.dev/v1/${from}..?from=USD&to=IDR`;
-    const r = await fetch(u);
-    if (!r.ok) throw new Error('frankfurter ' + r.status);
-    const j = await r.json();
-    const rates = j.rates || {};
-    const out: Record<string, number> = {};
-    for (const d of Object.keys(rates)) out[d] = rates[d].IDR;
-    const dates = Object.keys(out).sort();
-    if (!dates.length) throw new Error('frankfurter kosong');
-    let last = out[dates[0]];
-    const res: Record<string, number> = {};
-    for (let d = from; d <= today(); d = addDays(d, 1)) {
-      if (out[d]) last = out[d];
-      res[d] = last;
-    }
-    await setKv(cacheKey, res);
-    return res;
-  } catch {
-    // fallback: kurs tunggal hari ini utk semua tanggal (perilaku lama)
-    const now = await usdIdr();
-    const res: Record<string, number> = {};
-    for (let d = from; d <= today(); d = addDays(d, 1)) res[d] = now;
-    return res;
+  const end = today();
+  const cacheCoversRange = cached && typeof cached === 'object' &&
+    Number.isFinite(cached[from]) && cached[from] > 0 &&
+    Number.isFinite(cached[end]) && cached[end] > 0;
+  if (cacheCoversRange) return cached!;
+
+  // Ambil beberapa hari sebelum tanggal awal agar akhir pekan/libur di awal
+  // rentang bisa memakai kurs hari kerja sebelumnya, bukan kurs masa depan.
+  const requestFrom = addDays(from, -7);
+  const u = `https://api.frankfurter.dev/v1/${requestFrom}..${end}?from=USD&to=IDR`;
+  const r = await fetch(u);
+  if (!r.ok) throw new Error('Kurs historis USD/IDR gagal (HTTP ' + r.status + ')');
+  const j = await r.json();
+  const out: Record<string, number> = {};
+  for (const [date, rates] of Object.entries(j?.rates || {})) {
+    const value = Number((rates as any)?.IDR);
+    if (Number.isFinite(value) && value > 0) out[date] = value;
   }
+  const dates = Object.keys(out).sort();
+  if (!dates.length) throw new Error('Kurs historis USD/IDR kosong atau tidak didukung sumber data');
+  let last = 0;
+  for (const date of dates) if (date <= from) last = out[date];
+  if (!last) throw new Error('Kurs historis USD/IDR tidak mencakup tanggal awal ' + from);
+  const result: Record<string, number> = {};
+  for (let d = from; d <= end; d = addDays(d, 1)) {
+    if (out[d]) last = out[d];
+    result[d] = last;
+  }
+  if (!result[end]) throw new Error('Kurs historis USD/IDR tidak mencakup hari ini');
+  await setKv(cacheKey, result);
+  return result;
 }
 
 // Harga penutupan harian dalam mata uang asli aset: { 'YYYY-MM-DD': harga }
