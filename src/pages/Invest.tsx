@@ -69,15 +69,15 @@ export default function Invest() {
   const refreshWatch = async (ids: string[]) => {
     setWatchLoading(true);
     const out: Record<string, { p: number; prev: number; t: string }> = {};
+    const { series, usdIdr } = await import('../market');
+    const rate = await usdIdr();
     for (const id of ids) {
       try {
-        const { series } = await import('../market');
         const ser = await series(id, addDays(today(), -8));
         const ks = Object.keys(ser).sort();
         if (ks.length) {
           const p = ser[ks[ks.length - 1]];
           const prev = ser[ks[Math.max(0, ks.length - 2)]];
-          const rate = await usdIdr();
           out[id] = { p: isIDR(id) ? p : p * rate, prev: isIDR(id) ? prev : prev * rate, t: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) };
         }
       } catch { /* offline → biarkan */ }

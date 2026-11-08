@@ -20,7 +20,7 @@ const PRI = ['', 'Tinggi', 'Sedang', 'Rendah'];
 const PRI_C = ['', '#ef4444', '#f59e0b', '#22c55e'];
 
 // Terinspirasi Todoist/Things 3: progress hari ini, checkbox bulat prioritas, sheet tambah
-export default function Todo() {
+export default function Todo({ go }: { go?: (t: string) => void }) {
   const tasks = useLiveQuery(() => db.tasks.toArray(), []) || [];
   const [sel, setSel] = useState(today());
   const [cur, setCur] = useState(() => { const d = new Date(); d.setDate(1); return d; });
@@ -103,8 +103,9 @@ export default function Todo() {
             </span>
             <button className="link" title="Edit tugas" onClick={() => setEdit(t)}><Ic.pencil size={13} /></button>
             <button className="link" title="Catatan tugas" onClick={() => {
-              window.dispatchEvent(new CustomEvent('notefor', { detail: { taskId: t.id, date: sel, title: t.title } }));
-            }}><Ic.pencil size={13} /></button>
+              go && go('notes');
+              setTimeout(() => window.dispatchEvent(new CustomEvent('notefor', { detail: { taskId: t.id, date: sel, title: t.title } })), 350);
+            }}><Ic.note size={13} /></button>
             <button className="link" onClick={() => { cancel(t.id!); db.tasks.delete(t.id!); }}>Hapus</button>
           </div>
         ))}

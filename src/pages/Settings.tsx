@@ -30,6 +30,7 @@ export default function Settings() {
   };
   const restore = async (f?: File) => {
     if (!f) return;
+    if (!confirm('Pulihkan backup ini akan MENGGANTI SEMUA data saat ini (transaksi, tugas, catatan). Lanjut?')) return;
     try {
       const o = JSON.parse(await f.text());
       const all = [...TABLES, 'kv'] as any[];

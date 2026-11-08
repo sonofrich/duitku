@@ -31,7 +31,9 @@ export default function Finance() {
   useEffect(() => {
     const h = (e: Event) => { const k = (e as CustomEvent).detail; if (k === 'in' || k === 'out') setSheet(k); };
     window.addEventListener('duitku:newsheet', h);
-    return () => window.removeEventListener('duitku:newsheet', h);
+    const vis = () => { if (document.visibilityState === 'hidden') setSheet(''); }; // sheet auto-close saat app ke background (APK), biar gak nyangkut
+    document.addEventListener('visibilitychange', vis);
+    return () => { window.removeEventListener('duitku:newsheet', h); document.removeEventListener('visibilitychange', vis); };
   }, []);
 
   const bal = (id: number) => (accounts.find(a => a.id === id)?.balance0 || 0) +

@@ -109,7 +109,7 @@ export default function App() {
       <main>
         <Suspense fallback={<div className="loading">Memuat menu…</div>}>
           {cfg ? <Settings /> : tab === 'home' ? <Home go={setTab} /> : tab === 'uang' ? <Finance />
-            : tab === 'tugas' ? <Todo /> : tab === 'dca' ? <Invest /> : tab === 'notes' ? <Notes /> : <AI />}
+            : tab === 'tugas' ? <Todo go={setTab} /> : tab === 'dca' ? <Invest /> : tab === 'notes' ? <Notes /> : <AI />}
         </Suspense>
       </main>
       <nav className="floatnav">{TABS.map(([k, l, ico]) => { const NI = (Ic as any)[ico]; return (
