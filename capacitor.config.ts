@@ -4,7 +4,7 @@ const config: CapacitorConfig = {
   appName: 'FINTRA',
   webDir: 'dist',
   // Keyboard Android: resize konten, jangan fullscreen-cover yang bikin webview crash
-  android: { allowMixedContent: true },
+  android: { allowMixedContent: false },
   // CapacitorHttp membuat fetch() lewat jalur native sehingga bebas CORS (Binance, Yahoo, dll)
   plugins: { CapacitorHttp: { enabled: true }, Keyboard: { resize: 'native' } }
 };
