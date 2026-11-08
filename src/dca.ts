@@ -1,6 +1,6 @@
 import { db, DcaPlan, Trade } from './db';
 import { addDays, today } from './util';
-import { isIDR, series, usdIdr, usdIdrSeries, label as labelOf } from './market';
+import { isIDR, series, usdIdrSeries, label as labelOf } from './market';
 
 // Kunci per plan mencegah pemanggilan bersamaan dalam satu tab.
 // Pemeriksaan idempotensi di transaksi IndexedDB juga melindungi dari tab/perangkat
