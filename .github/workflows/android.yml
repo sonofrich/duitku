@@ -16,7 +16,13 @@ jobs:
           distribution: temurin
           java-version: 17
       - name: Install locked dependencies
-        run: npm ci --no-audit --no-fund
+        run: |
+          for attempt in 1 2 3; do
+            npm ci --no-audit --no-fund && exit 0
+            echo "npm ci gagal pada percobaan $attempt; ulangi..."
+            sleep 10
+          done
+          exit 1
       - run: npm run typecheck
       - run: npm run build
       - run: npx cap add android
